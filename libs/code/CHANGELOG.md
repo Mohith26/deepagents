@@ -2,6 +2,18 @@
 
 # Deep Agents Code Changelog
 
+## [0.1.50](https://github.com/langchain-ai/deepagents/compare/deepagents-code==0.1.49...deepagents-code==0.1.50) (2026-07-27)
+
+
+### Features
+
+* **code:** integrate Hooks v2 server lifecycle events ([#4997](https://github.com/langchain-ai/deepagents/issues/4997)) ([2487c4b](https://github.com/langchain-ai/deepagents/commit/2487c4b87dff264ae1e8d34c7ce9249dd4b29760))
+
+
+### Bug Fixes
+
+* **code:** anchor toasts above the chat input ([#5101](https://github.com/langchain-ai/deepagents/issues/5101)) ([f1727c7](https://github.com/langchain-ai/deepagents/commit/f1727c785c44809e7b1b7ed8c5d0b31c560ae3ad))
+
 ## [0.1.49](https://github.com/langchain-ai/deepagents/compare/deepagents-code==0.1.48...deepagents-code==0.1.49) (2026-07-27)
 
 ### Features
