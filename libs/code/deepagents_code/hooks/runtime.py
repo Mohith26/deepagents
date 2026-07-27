@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from deepagents_code.hooks.client import HookFulfillmentLedger
 from deepagents_code.hooks.engine import HookEngine
+from deepagents_code.hooks.feedback import HookFeedback
 from deepagents_code.hooks.loading import load_hooks_config
 from deepagents_code.hooks.models.domain import (
     HookDecision,
@@ -55,6 +56,7 @@ class HooksRuntime:
     cwd: Path
     workspace_trusted: bool
     project_hooks_loaded: bool
+    feedback: HookFeedback
     fulfillments: HookFulfillmentLedger
 
     @classmethod
@@ -65,6 +67,7 @@ class HooksRuntime:
         workspace_trusted: bool = False,
         config_dir: Path | None = None,
         transcript_root: Path | None = None,
+        feedback: HookFeedback | None = None,
     ) -> HooksRuntime:
         """Load configuration once and freeze a session runtime.
 
@@ -76,6 +79,7 @@ class HooksRuntime:
                 Defaults to `~/.deepagents/transcripts` regardless of
                 `config_dir` (project and test hook configs must not relocate
                 the global transcript store).
+            feedback: Shared user-facing feedback presenter.
 
         Returns:
             A runtime ready to execute invocations for this session.
@@ -105,6 +109,7 @@ class HooksRuntime:
             cwd=project_context.user_cwd,
             workspace_trusted=workspace_trusted,
             project_hooks_loaded=loaded.project_source_loaded,
+            feedback=feedback or HookFeedback(),
             fulfillments=HookFulfillmentLedger(),
         )
 
@@ -167,6 +172,7 @@ class HooksRuntime:
             prepared.invocation,
             transcript_path=prepared.transcript_path,
             agent_transcript_path=prepared.agent_transcript_path,
+            progress=self.feedback.update_progress,
         )
 
     def prepare_invocation(

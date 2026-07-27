@@ -91,7 +91,6 @@ from deepagents_code.hooks import (
 )
 from deepagents_code.hooks.client_lifecycle import (
     PermissionHookOutcome as _PermissionHookOutcome,
-    permission_hook_outcome,
 )
 from deepagents_code.input import MediaTracker, parse_file_mentions
 from deepagents_code.media_utils import create_multimodal_content
@@ -190,7 +189,7 @@ async def _permission_hook_outcomes(
                 claimed.add(candidate_id)
                 break
         try:
-            hook_decision = await service.permission_request(
+            outcome = await service.resolve_permission(
                 context,
                 ToolCallData(id=tool_id, name=name, args=args),
             )
@@ -198,7 +197,7 @@ async def _permission_hook_outcomes(
             logger.warning("PermissionRequest hook invocation failed", exc_info=True)
             outcomes.append(_PermissionHookOutcome(None, False))
             continue
-        outcomes.append(permission_hook_outcome(hook_decision))
+        outcomes.append(outcome)
     return outcomes
 
 

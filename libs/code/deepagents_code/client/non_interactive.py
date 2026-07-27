@@ -196,6 +196,11 @@ class _ConsoleSpinner:
         self._console = console
         self._live: Live | None = None
 
+    @property
+    def is_running(self) -> bool:
+        """Whether the live spinner is active."""
+        return self._live is not None
+
     def start(self, message: str = "Working...") -> None:
         """Start the spinner with the given message.
 
@@ -207,17 +212,26 @@ class _ConsoleSpinner:
         """
         if self._live is not None:
             return
-        renderable = RichSpinner(
-            "dots",
-            text=Text(f" {message}", style="dim"),
-            style="dim",
-        )
+        renderable = self._renderable(message)
         try:
             self._live = Live(renderable, console=self._console, transient=True)
             self._live.start()
         except (AttributeError, TypeError, OSError) as exc:
             logger.warning("Spinner start failed: %s", exc)
             self._live = None
+
+    def update(self, message: str) -> None:
+        """Replace the message on a running spinner.
+
+        Args:
+            message: Status text to display next to the spinner.
+        """
+        if self._live is None:
+            return
+        try:
+            self._live.update(self._renderable(message))
+        except (AttributeError, TypeError, OSError) as exc:
+            logger.warning("Spinner update failed: %s", exc)
 
     def stop(self) -> None:
         """Stop the spinner if running. Can be restarted with `start`."""
@@ -228,6 +242,14 @@ class _ConsoleSpinner:
                 logger.warning("Spinner stop failed: %s", exc)
             finally:
                 self._live = None
+
+    @staticmethod
+    def _renderable(message: str) -> RichSpinner:
+        return RichSpinner(
+            "dots",
+            text=Text(f" {message}", style="dim"),
+            style="dim",
+        )
 
 
 async def _terminate_startup_process(proc: Process) -> None:
@@ -1063,7 +1085,6 @@ async def _process_hitl_interrupts(
         ClientHookContext,
         ClientHookStopError,
         PermissionReviewDecision,
-        permission_hook_outcome,
         permission_review_payload,
     )
     from deepagents_code.hooks.models.domain import (
@@ -1084,8 +1105,8 @@ async def _process_hitl_interrupts(
         decisions: list[PermissionReviewDecision | None] = []
         for index, action_request in enumerate(action_requests):
             try:
-                hook_decision = (
-                    await state.client_hooks.permission_request(
+                outcome = (
+                    await state.client_hooks.resolve_permission(
                         context,
                         ToolCallData(
                             id=f"{interrupt_id}:{index}",
@@ -1101,11 +1122,10 @@ async def _process_hitl_interrupts(
                     "PermissionRequest hook invocation failed",
                     exc_info=True,
                 )
-                hook_decision = None
-            if hook_decision is None:
+                outcome = None
+            if outcome is None:
                 decisions.append(None)
                 continue
-            outcome = permission_hook_outcome(hook_decision)
             if outcome.interrupt:
                 reason = (
                     outcome.decision.get("message")
@@ -1404,6 +1424,7 @@ async def _run_agent_loop(
         ClientHookStopError,
     )
     from deepagents_code.hooks.context import apply_hooks_context
+    from deepagents_code.hooks.feedback import HookFeedback, HookFeedbackSeverity
     from deepagents_code.hooks.models.domain import (
         DcodeNotificationKind,
         HookEvent,
@@ -1412,6 +1433,41 @@ async def _run_agent_loop(
     )
     from deepagents_code.hooks.runtime import HooksRuntime
 
+    hook_owned_spinner = False
+
+    def present_hook_notice(
+        message: str,
+        severity: HookFeedbackSeverity,
+    ) -> None:
+        style = (
+            "bold red"
+            if severity == "error"
+            else "yellow"
+            if severity == "warning"
+            else "dim"
+        )
+        console.print(Text(message, style=style), highlight=False)
+
+    def update_hook_status(message: str) -> None:
+        nonlocal hook_owned_spinner
+        if spinner is None:
+            return
+        if message:
+            if spinner.is_running:
+                spinner.update(message)
+            else:
+                spinner.start(message)
+                hook_owned_spinner = True
+        elif hook_owned_spinner:
+            spinner.stop()
+            hook_owned_spinner = False
+        elif spinner.is_running:
+            spinner.update("Working...")
+
+    feedback = HookFeedback(
+        notice=present_hook_notice,
+        status=update_hook_status if spinner is not None else None,
+    )
     resolved_approval_mode = approval_mode or ApprovalMode.MANUAL
     if hooks_runtime is None:
         try:
@@ -1419,10 +1475,16 @@ async def _run_agent_loop(
             hooks_runtime = HooksRuntime.create(
                 cwd=Path.cwd(),
                 workspace_trusted=trust_project_hooks,
+                feedback=feedback,
             )
         except Exception:
             logger.exception("Failed to create HooksRuntime; server hooks disabled")
             hooks_runtime = None
+    else:
+        hooks_runtime.feedback.notice = feedback.notice
+        hooks_runtime.feedback.status = feedback.status
+    if hooks_runtime is not None:
+        hooks_runtime.feedback.present_diagnostics(hooks_runtime.snapshot.diagnostics)
     apply_hooks_context(
         context,
         hooks_runtime,
@@ -1432,12 +1494,7 @@ async def _run_agent_loop(
     context["auto_approve"] = resolved_approval_mode is ApprovalMode.YOLO
     state.hooks_runtime = hooks_runtime
     state.client_hooks = (
-        ClientHookService(
-            hooks_runtime,
-            notice=lambda notice: console.print(Text(notice), highlight=False),
-        )
-        if hooks_runtime is not None
-        else None
+        ClientHookService(hooks_runtime) if hooks_runtime is not None else None
     )
 
     client_context = ClientHookContext.create(

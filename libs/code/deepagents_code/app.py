@@ -604,6 +604,7 @@ if TYPE_CHECKING:
         ClientHookContext,
         ClientHookService,
     )
+    from deepagents_code.hooks.feedback import HookFeedback, HookFeedbackSeverity
     from deepagents_code.hooks.models.domain import (
         SessionEndCause,
         SessionStartCause,
@@ -4309,6 +4310,26 @@ class DeepAgentsApp(App):
                 lambda: asyncio.create_task(self._run_session_start_sequence()),
             )
 
+    def _create_hook_feedback(self) -> HookFeedback:
+        from deepagents_code.hooks.feedback import HookFeedback
+
+        return HookFeedback(
+            notice=self._notify_hook_feedback,
+            status=self._update_hook_status,
+        )
+
+    def _notify_hook_feedback(
+        self,
+        message: str,
+        severity: HookFeedbackSeverity,
+    ) -> None:
+        self.notify(message, severity=severity, markup=False)
+
+    def _update_hook_status(self, message: str) -> None:
+        """Update the status bar with hook-owned progress text."""
+        if self._status_bar:
+            self._status_bar.set_status_message(message, source="hooks")
+
     async def _init_session_state(self) -> None:
         """Create session state (hooks runtime + client hook service)."""
         async with self._session_init_lock:
@@ -4330,6 +4351,7 @@ class DeepAgentsApp(App):
                     state.hooks_runtime = HooksRuntime.create(
                         cwd=Path(self._cwd),
                         workspace_trusted=self._trust_project_hooks,
+                        feedback=self._create_hook_feedback(),
                     )
                 except Exception:
                     logger.exception(
@@ -4358,9 +4380,11 @@ class DeepAgentsApp(App):
             if session_state.hooks_runtime is not None:
                 from deepagents_code.hooks.client_lifecycle import ClientHookService
 
+                session_state.hooks_runtime.feedback.present_diagnostics(
+                    session_state.hooks_runtime.snapshot.diagnostics
+                )
                 session_state.client_hooks = ClientHookService(
-                    session_state.hooks_runtime,
-                    notice=lambda message: self.notify(message, markup=False),
+                    session_state.hooks_runtime
                 )
             self._session_state = session_state
             self._session_state_ready.set()
@@ -4380,17 +4404,16 @@ class DeepAgentsApp(App):
                 HooksRuntime.create,
                 cwd=Path(self._cwd),
                 workspace_trusted=self._trust_project_hooks,
+                feedback=self._create_hook_feedback(),
             )
         except Exception:
             logger.exception("Failed to refresh HooksRuntime; hooks disabled")
             state.hooks_runtime = None
             state.client_hooks = None
             return
+        runtime.feedback.present_diagnostics(runtime.snapshot.diagnostics)
         state.hooks_runtime = runtime
-        state.client_hooks = ClientHookService(
-            runtime,
-            notice=lambda message: self.notify(message, markup=False),
-        )
+        state.client_hooks = ClientHookService(runtime)
 
     def _client_hook_context(
         self, *, thread_id: str | None = None

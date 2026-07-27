@@ -19,6 +19,7 @@ from deepagents_code.hooks.client_lifecycle import (
     ClientHookService,
     ClientHookStopError,
 )
+from deepagents_code.hooks.feedback import HookFeedback
 from deepagents_code.hooks.models.domain import (
     CompactTrigger,
     DcodeNotificationKind,
@@ -62,6 +63,7 @@ class _Runtime:
     cwd: Path
     decisions: deque[HookDecision]
     invocations: list[HookInvocation] = field(default_factory=list)
+    feedback: HookFeedback = field(default_factory=HookFeedback)
 
     def configured_events(self) -> frozenset[HookEvent]:
         return frozenset(decision.event for decision in self.decisions)
@@ -134,7 +136,10 @@ async def test_service_applies_common_effects_and_session_context(
     decision = await service.session_start(_context(), SessionStartCause.STARTUP)
 
     assert decision.context == ["hook context"]
-    assert notices == ["visible notice"]
+    assert notices == [
+        "Hook warning: diagnostic",
+        "visible notice",
+    ]
     assert capsys.readouterr().out == "\a"
     assert "test_warning" in caplog.text
     assert service.take_session_context("thread-1") == ("hook context",)
@@ -253,9 +258,15 @@ async def test_notification_stop_interrupts_client_processing(tmp_path: Path) ->
         ("allow", {"type": "approve"}, [], {"type": "approve"}),
         (
             "deny",
-            {"type": "reject", "message": "blocked"},
+            {
+                "type": "reject",
+                "message": "blocked",
+            },
             [],
-            {"type": "reject", "message": "blocked"},
+            {
+                "type": "reject",
+                "message": "blocked",
+            },
         ),
         ("none", None, [{"type": "approve"}], {"type": "approve"}),
     ],
@@ -267,6 +278,7 @@ async def test_tui_permission_decisions_precede_review(
     reviewed: list[HITLDecision],
     expected: dict[str, str],
 ) -> None:
+    notices: list[tuple[str, str]] = []
     runtime = _Runtime(
         cwd=tmp_path,
         decisions=deque(
@@ -276,6 +288,9 @@ async def test_tui_permission_decisions_precede_review(
                     reason="blocked" if behavior == "deny" else None,
                 )
             ]
+        ),
+        feedback=HookFeedback(
+            notice=lambda message, severity: notices.append((message, severity))
         ),
     )
     state = _SessionState(
@@ -295,18 +310,34 @@ async def test_tui_permission_decisions_precede_review(
     assert outcomes[0].decision == hook_decision
     assert _merge_permission_outcomes(outcomes, reviewed) == [expected]
     assert runtime.invocations[0].event.event is HookEvent.PERMISSION_REQUEST
+    if behavior == "deny":
+        assert notices == [
+            (
+                "PermissionRequest hook denied read_file: blocked",
+                "warning",
+            )
+        ]
+    elif behavior == "allow":
+        assert notices == [("PermissionRequest hook allowed read_file.", "information")]
+    else:
+        assert notices == []
 
 
 @pytest.mark.parametrize(
-    ("decisions", "expected"),
+    ("decisions", "expected", "attribution"),
     [
         (
             deque([_permission("allow")]),
             {"type": "approve"},
+            ("PermissionRequest hook allowed read_file.", "information"),
         ),
         (
             deque([_permission("deny", reason="blocked")]),
-            {"type": "reject", "message": "blocked"},
+            {
+                "type": "reject",
+                "message": "blocked",
+            },
+            ("PermissionRequest hook denied read_file: blocked", "warning"),
         ),
         (
             deque(
@@ -316,6 +347,7 @@ async def test_tui_permission_decisions_precede_review(
                 ]
             ),
             {"type": "approve"},
+            None,
         ),
     ],
 )
@@ -324,8 +356,16 @@ async def test_headless_permission_decisions_precede_resolution(
     monkeypatch: pytest.MonkeyPatch,
     decisions: deque[HookDecision],
     expected: dict[str, str],
+    attribution: tuple[str, str] | None,
 ) -> None:
-    runtime = _Runtime(cwd=tmp_path, decisions=decisions)
+    notices: list[tuple[str, str]] = []
+    runtime = _Runtime(
+        cwd=tmp_path,
+        decisions=decisions,
+        feedback=HookFeedback(
+            notice=lambda message, severity: notices.append((message, severity))
+        ),
+    )
     state = StreamState(client_hooks=ClientHookService(runtime))
     state.pending_interrupts["interrupt-1"] = {
         "action_requests": [
@@ -352,6 +392,10 @@ async def test_headless_permission_decisions_precede_resolution(
     should_resolve = expected == {"type": "approve"} and len(runtime.invocations) == 2
     assert resolution_calls == int(should_resolve)
     assert runtime.invocations[0].event.event is HookEvent.PERMISSION_REQUEST
+    if attribution is None:
+        assert notices == []
+    else:
+        assert notices == [attribution]
 
 
 async def test_headless_permission_uses_live_context(tmp_path: Path) -> None:

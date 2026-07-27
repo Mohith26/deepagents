@@ -35,10 +35,9 @@ from deepagents_code.client.non_interactive import (
     _process_message_chunk,
 )
 from deepagents_code.config import ASCII_GLYPHS, UNICODE_GLYPHS, build_stream_config
+from deepagents_code.hooks.client_lifecycle import PermissionHookOutcome
 from deepagents_code.hooks.models.domain import (
     HookEvent,
-    PermissionEffect,
-    PermissionRequestDecision,
     SessionStartDecision,
     UserPromptSubmitDecision,
 )
@@ -2038,13 +2037,10 @@ class TestExecuteTaskTextualClientLifecycle:
         )
         hooks.take_session_context.return_value = ()
         hooks.pre_compact = AsyncMock()
-        hooks.permission_request = AsyncMock(
+        hooks.resolve_permission = AsyncMock(
             side_effect=lambda *_args: (
                 order.append("permission"),
-                PermissionRequestDecision(
-                    event=HookEvent.PERMISSION_REQUEST,
-                    permission=PermissionEffect(behavior="allow"),
-                ),
+                PermissionHookOutcome({"type": "approve"}),
             )[1]
         )
         state = TextualSessionState(thread_id="thread-1")
@@ -6544,13 +6540,12 @@ class TestToolHooksTextual:
         client_hooks.has_handlers.side_effect = lambda event: (
             event is HookEvent.PERMISSION_REQUEST
         )
-        client_hooks.permission_request = AsyncMock(
-            return_value=PermissionRequestDecision(
-                event=HookEvent.PERMISSION_REQUEST,
-                permission=PermissionEffect(
-                    behavior="deny",
-                    reason="blocked by hook",
-                ),
+        client_hooks.resolve_permission = AsyncMock(
+            return_value=PermissionHookOutcome(
+                {
+                    "type": "reject",
+                    "message": "blocked by hook",
+                }
             )
         )
         request_approval = AsyncMock()
@@ -6575,7 +6570,7 @@ class TestToolHooksTextual:
         )
 
         request_approval.assert_not_awaited()
-        client_hooks.permission_request.assert_awaited_once()
+        client_hooks.resolve_permission.assert_awaited_once()
         resume_cmd = agent.stream_inputs[1]
         assert isinstance(resume_cmd, Command)
         resume_payload = cast("dict[str, dict[str, Any]]", resume_cmd.resume)
